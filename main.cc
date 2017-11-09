@@ -32,56 +32,113 @@ ChatDialog::ChatDialog()
 	layout->addWidget(textline);
 	setLayout(layout);
 
-	// bind socket
+	// Create a UDP network socket
 	socket = new NetSocket();
 	if (!socket->bind()) {
 		exit(1);
 	}
 	
+	originId = generateOriginId(socket->getPort());
+	addNeighbors();
+	
 	// initialize timeout timer
 	timer = new QTimer(this);
-	connect(timer, SIGNAL(timeout()), this, SLOT(handleTimeout()));
+	connect(timer, SIGNAL(timeout()), this, SLOT(timeoutHandler()));
 
 	// initialize anti-entropy timer
 	antiEntropyTimer = new QTimer(this);
-	connect(antiEntropyTimer, SIGNAL(timeout()), this, SLOT(handleAntiEntropyTimeout()));
-	antiEntropyTimer->start(ANTIENTROPY_TIMEOUT);
+	connect(antiEntropyTimer, SIGNAL(timeout()), this, SLOT(antiEntropyHandler()));
+
+	this->seqNum = 0;
 	
 	// Register a callback on the textline's returnPressed signal
 	// so that we can send the message entered by the user.
-	connect(textline, SIGNAL(returnPressed()),
-		this, SLOT(gotReturnPressed(
-		
-		)));
+	connect(textline, SIGNAL(returnPressed()), this, SLOT(gotReturnPressed()));
 
 	// connect the readyRead signal in QUdpSocket
 	connect(socket, SIGNAL(readyRead()), this, SLOT(readDatagrams()));
+}
 
-	this->seqNum = 0;
+
+void ChatDialog::addNeighbors()
+{
+	int port = socket->getPort();
+	if (port == socket->getMyPortMin()){
+		neighbors.append(port + 1);
+		qDebug() << "INFO: adding neighbor: " << neighbors.first();
+	}
+	if (port == socket->getMyPortMax()){
+		neighbors.append(port - 1);
+		qDebug() << "INFO: adding neighbor: " << neighbors.first();		
+	}
+	if (port < socket->getMyPortMax() && port > socket->getMyPortMin()){
+		neighbors.append(port - 1);
+		qDebug() << "INFO: adding neighbor: " << neighbors.first();				
+		neighbors.append(port + 1);
+		qDebug() << "INFO: adding neighbor: " << neighbors.last();				
+	}
 }
 
 // called when a new payload of network data has arrived on socket
 void ChatDialog::readDatagrams()
 {
-	while (this.socket->hasPendingDatagrams()) {
-		QByteArray bytes;
-		bytes.resize(socket->pendingDatagramSize());
-		QHostAddress sender;
-		quint16 senderPort;
-
-		socket->readDatagram(bytes.data(), bytes.size(), &sender, &senderPort);
-		processDatagram(bytes);
+	QHostAddress senderAddr;
+	quint16 senderPort;
+	// receive and serialize data from socket
+	socket->readData(senderAddr, senderPort);
+	
+	// check if rumorMessage of statusMessage
+	// if statusMessage, compare with own status
+	// if you have message not seen by peer, rumorMonger
+	// if peer has message not seen by you, send status 
+	if (message->contains("Want")){
+		qDebug() << "INFO: Received a status message";
+		// process statusMessage
+		QVariantMap *peerStatusValue = message->statusValue;
+		QVariantMap *statusValue = statusMessage->statusValue;
+		processStatusMessage(peerStatusValue, statusValue);
 	}
+	// if rumorMessage, add to infoMap
+	// randomly rumorMonger or stop
+	else {
+		qDebug() << "INFO: Received a rumor message";
+		processRumorMessage();
+	}
+	
 }
 
-void ChatDialog::processDatagram(QByteArray bytes){
-	QVariantMap messageMap;
+void ChatDialog::processStatusMessage(QVariantMap *peerStatusValue)
+{
+	// local ahead of remote, send new rumor
+	// local behind remote, send status
+	// local in sync with remote, rumorMonger
 
+}
+
+void ChatDialog::processRumorMessage(QVariantMap *rumorMessage)
+{
+	// get origin and seqnum
+	// terminate if origin is self
+	
+	// create new rumor message
+	Gossip *gossip = new Gossip(text, origin, recSeqNum);
+	// insert rumor Message to local infoMap
+	
+	// update status message if behind
+	
+	// rumorMonger with received message
+	
+	// add text to textView
+	
+	// send statusMessage as ack
 }
  
 QString ChatDialog::generateOriginId(int port)
-{
-	QString qString('Origin' + port);
+{	
+	int rand_val = qrand();
+
+	QString qString(QHostInfo::localHostName() + port + rand_val);
+	qDebug() << "INFO: generated origin id: " << qString;
 	return qString;
 }
 
@@ -99,27 +156,51 @@ void ChatDialog::gotReturnPressed()
 
 void ChatDialog::sendMessage(QString text)
 {
-	Gossip *message = new Gossip(text, this->socket, this.seqnum)
+	QString origin = generateOriginId(socket->getPort());
+	Gossip *message = new Gossip(text, origin, this->seqNum);
+	
+	// add own originId, seqNum and message to map
+	QMap infoMap = new QMap<QString, QMap<quint32, RumorMessage*>*>();
+	QMap seqMessageMap = new QMap<quint32, RumorMessage*>();
+	seqMessageMap->insert(this->seqNum, message);
+	infoMap->insert(this->name, seqMessageMap); 
+	
+	// update own status message
+	statusMessage.updateStatus(this->name, this->seqNum);
+	
+	// rumor monger to random neighbor
+	rumorMonger(message);
 	
 }
 
-void ChatDialog::rumorMonger(QVariantMap message)
+void ChatDialog::rumorMonger(Gossip *message)
 {
-
+	// pick a random neighbor and send rumorMessage
+	quint32 receiverPort = (quint32)neighbors.at(qrand() % neighbors.size());
+	qDebug() << "Gossiping to neighbor " << receiverPort;
+	socket->sendData(message, socket->getPort());
+	lastRumorMessage = message;
+	this->timer->start(TIMEOUT);
+	// wait for statusMessage until timeout
 }
 
 void ChatDialog::timeoutHandler()
 {
 	qDebug() << "INFO: in timeoutHandler";
-	// resent last message to last communicated node
+	// resend last message to last communicated node
+	socket->sendData(lastRumorMessage, socket->getPort());
 	// reset timer
-	timer->start(1000);
+	timer->start(TIMEOUT);
 }
 
 
 void ChatDialog::antiEntropyHandler()
 {
 	qDebug() << "INFO: in antiEntropyHandler()";
+	Gossip *status;
+	int rand_idx = qrand() % neighbors.size();
+	socket->sendData(status, (quint32)neighbors.at(rand_idx));
+
 	// reset timer
 	antiEntropyTimer->start(ANTIENTROPY_TIMEOUT);
 }
@@ -138,19 +219,20 @@ NetSocket::NetSocket()
 	myPortMax = myPortMin + 3;
 }
 
-int NetSocket::bind()
+bool NetSocket::bind()
 {
 	// Try to bind to each of the range myPortMin..myPortMax in turn.
 	for (int p = myPortMin; p <= myPortMax; p++) {
 		if (QUdpSocket::bind(p)) {
-			qDebug() << "bound to UDP port " << p;
-			return p;
+			qDebug() << "INFO: bound to UDP port " << p;
+			port = p;
+			return true;
 		}
 	}
 
 	qDebug() << "Oops, no ports in my default range " << myPortMin
 		<< "-" << myPortMax << " available";
-	return -1;
+	return false;
 }
 
 void NetSocket::sendData(Gossip *message, quint32 receiverPort)
@@ -174,6 +256,7 @@ void NetSocket::readData(QHostAddress senderAddr, quint16 senderPort)
 		QDataStream stream(&bytes, QIODevice::ReadOnly);
 		qDebug() << "Receiving " << *rumorMessage << " from " << senderPort;
 		stream >> *rumorMessage;
+		//TODO: return rumorMessage
 	}
 }
 
@@ -209,11 +292,6 @@ int main(int argc, char **argv)
 	// Create an initial chat dialog window
 	ChatDialog dialog;
 	dialog.show();
-
-	// Create a UDP network socket
-	NetSocket sock;
-	if (!sock.bind())
-		exit(1);
 
 	// Enter the Qt main loop; everything else is event driven
 	return app.exec();
