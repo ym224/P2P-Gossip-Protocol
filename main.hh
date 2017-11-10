@@ -59,6 +59,7 @@ private:
 	QVector<int> neighbors; //nodes on adjacent ports
 	quint32 seqNum;
 	QString originId;
+	bool timer_started;
 
 	//need to store a map of read originId to a map of (seqnum, message)
 	QMap<QString, QMap<quint32, QVariantMap> > messages;

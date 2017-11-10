@@ -41,6 +41,8 @@ ChatDialog::ChatDialog()
 	// generate unique ID for local origin
 	originId = generateOriginId(socket->getPort());
 	
+	setWindowTitle(originId);
+	
 	// add adjacent ports as neighbors
 	addNeighbors();
 	
@@ -52,7 +54,8 @@ ChatDialog::ChatDialog()
 	antiEntropyTimer = new QTimer(this);
 	connect(antiEntropyTimer, SIGNAL(timeout()), this, SLOT(antiEntropyHandler()));
 
-	this->seqNum = 0;
+	seqNum = 0;
+	timer_started = false;
 	
 	// Register a callback on the textline's returnPressed signal
 	// so that we can send the message entered by the user.
@@ -117,6 +120,8 @@ void ChatDialog::processStatusMessage(QVariantMap peerStatusMessage, quint16 sen
 	qDebug() << "Peer status is" << peerStatusValue;
         qDebug() << "Local status is" << statusValue;
 
+	timer->stop();
+	timer_started = false;
 	bool insync = true;
 	for (QString origin: statusValue.keys()){
 		// if local ahead of remote, send new rumor
@@ -130,6 +135,8 @@ void ChatDialog::processStatusMessage(QVariantMap peerStatusMessage, quint16 sen
 		        QVariantMap rumorMessage = messages[origin].value(seqNum);
 		        socket->sendData(serializeMessage(rumorMessage), senderPort);
 		        lastRumorMessage = rumorMessage;
+		        timer->start(TIMEOUT);
+		        timer_started = true;
 			insync = false;
 		}
 	}
@@ -155,6 +162,10 @@ void ChatDialog::processRumorMessage(QVariantMap rumorMessage, quint16 senderPor
 	QString origin = rumorMessage["Origin"].toString();
 	quint32 seqNum = rumorMessage["SeqNo"].toInt();
 	QString chatText = rumorMessage["ChatText"].toString();
+	
+	timer->stop();
+	timer_started = false;
+	
 	if (origin == this->originId) {
 		qDebug() << "INFO: Received rumor message originated locally";
 		return;
@@ -177,7 +188,6 @@ void ChatDialog::processRumorMessage(QVariantMap rumorMessage, quint16 senderPor
 	else {
 		qDebug() << "INFO: Received rumor message out of sequence";
 	}
-	timer->stop();
 	// send statusMessage as ack
 	socket->sendData(serializeMessage(statusMessage), senderPort);
 }
@@ -229,16 +239,16 @@ void ChatDialog::rumorMonger(QVariantMap message)
 	socket->sendData(serializeMessage(message), receiverPort);
 	lastRumorMessage = message;
 	timer->start(TIMEOUT);
-	// wait for statusMessage until timeout
+	timer_started = true;
 }
 
 void ChatDialog::timeoutHandler()
 {
-	qDebug() << "INFO: In timeoutHandler";
-	// rumor monger with last sent message
-	rumorMonger(lastRumorMessage);
-	// reset timer
-	timer->start(TIMEOUT);
+	if (timer_started) {
+		qDebug() << "INFO: In timeoutHandler";
+		// rumor monger with last sent message
+		rumorMonger(lastRumorMessage);
+	}
 }
 
 
