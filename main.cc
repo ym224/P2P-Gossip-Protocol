@@ -117,10 +117,36 @@ void ChatDialog::processStatusMessage(QVariantMap peerStatusMessage, quint16 sen
 	qDebug() << "Peer status is" << peerStatusValue;
         qDebug() << "Local status is" << statusValue;
 
-	// local ahead of remote, send new rumor
-	// local behind remote, send status
-	// local in sync with remote, rumorMonger
-
+	bool insync = true;
+	for (QString origin: statusValue.keys()){
+		// if local ahead of remote, send new rumor
+		if (!peerStatusValue.contains(origin) || peerStatusValue[origin].toUInt() < statusValue[origin].toUInt()){
+		        qDebug() << "INFO: Local ahead of remote";
+		        quint32 localSeqNum = statusValue[origin].toUInt();
+		        quint32 peerSeqNum = 1;
+		        if (peerStatusValue.contains(origin)) {
+		        	peerSeqNum = peerStatusValue[origin].toUInt();
+		        }
+		        // update local messages map
+		        QVariantMap rumorMessage = messages[origin].value(seqNum);
+		        socket->sendData(serializeMessage(rumorMessage), senderPort);
+		        lastRumorMessage = rumorMessage;
+			insync = false;
+		}
+	}
+	for (QString origin: peerStatusValue.keys()){
+		// local behind remote, send status
+		if (!statusValue.contains(origin) || statusValue[origin].toUInt() < peerStatusValue[origin].toUInt()){
+			qDebug() << "INFO: Remote ahead of local";
+			socket->sendData(serializeMessage(statusMessage), senderPort);	
+			insync = false;
+		}
+	}
+	// if local in sync with remote, flip coin, and rumorMonger if heads	
+	if (insync && qrand() > 1/2 * RAND_MAX) {
+		qDebug() << "INFO: Local and Remote in sync. Rumor mongering with last message.";	
+		rumorMonger(lastRumorMessage);
+	}
 }
 
 void ChatDialog::processRumorMessage(QVariantMap rumorMessage, quint16 senderPort)
