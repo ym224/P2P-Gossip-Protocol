@@ -122,7 +122,6 @@ void ChatDialog::processStatusMessage(QVariantMap peerStatusMessage, quint16 sen
 		// if local ahead of remote, send new rumor
 		if (!peerStatusValue.contains(origin) || peerStatusValue[origin].toUInt() < statusValue[origin].toUInt()){
 		        qDebug() << "INFO: Local ahead of remote";
-		        quint32 localSeqNum = statusValue[origin].toUInt();
 		        quint32 peerSeqNum = 1;
 		        if (peerStatusValue.contains(origin)) {
 		        	peerSeqNum = peerStatusValue[origin].toUInt();
@@ -157,7 +156,7 @@ void ChatDialog::processRumorMessage(QVariantMap rumorMessage, quint16 senderPor
 	quint32 seqNum = rumorMessage["SeqNo"].toInt();
 	QString chatText = rumorMessage["ChatText"].toString();
 	if (origin == this->originId) {
-		qDebug() << "Received rumor message locally";
+		qDebug() << "INFO: Received rumor message originated locally";
 		return;
 	}
 	qDebug() << "INFO: Received rumor message from" << origin << "with seqNum" << seqNum;
@@ -167,28 +166,27 @@ void ChatDialog::processRumorMessage(QVariantMap rumorMessage, quint16 senderPor
 	seqNumMap[seqNum] = rumorMessage;
 	messages[origin] = seqNumMap;		
 
-	// update status message if behind
+	// update status message if new
 	if (updateStatusMessage(origin, seqNum)){
 		// rumorMonger with received message
 		rumorMonger(rumorMessage);
 	
 		// add text to textView
-		textview->append(chatText);
+		textview->append(origin + ": " + chatText);
 	}
 	else {
 		qDebug() << "INFO: Received rumor message out of sequence";
 	}
 	timer->stop();
 	// send statusMessage as ack
-	socket->sendData(serializeMessage(rumorMessage), senderPort);
+	socket->sendData(serializeMessage(statusMessage), senderPort);
 }
  
 QString ChatDialog::generateOriginId(int port)
 {	
-	int rand_val = qrand();
-
-	QString qString(QHostInfo::localHostName() + "-" + QString::number(port));
-	qDebug() << "INFO: generated origin id: " << qString;
+	int id = port - socket->getMyPortMin();
+	QString qString(QHostInfo::localHostName() + "-" + QString::number(id));
+	qDebug() << "INFO: Generated origin id: " << qString;
 	return qString;
 }
 
@@ -196,10 +194,10 @@ void ChatDialog::gotReturnPressed()
 {
 	// Initially, just echo the string locally.
 	// Insert some networking code here...
-	qDebug() << "FIX: send message to other peers: " << textline->text();
+	qDebug() << "INFO: User entered " << textline->text();
 	
 	sendMessage(textline->text());
-	textview->append(textline->text());
+	textview->append(originId + ": " + textline->text());
 	
 	// Clear the textline to get ready for the next input message.
 	textline->clear();
@@ -214,7 +212,8 @@ void ChatDialog::sendMessage(QString text)
 	QMap<quint32, QVariantMap> seqMessageMap;
 	seqMessageMap[seqNum] = message;
 	messages[originId] = seqMessageMap;
- 
+ 	qDebug() << "INFO: Updated local messages with seqNum/rumorMessage " << messages;
+ 	
 	// update status message with next seqNum for local origin
 	updateStatusMessage(originId, seqNum);
 	
@@ -226,8 +225,8 @@ void ChatDialog::rumorMonger(QVariantMap message)
 {
 	// pick a random neighbor and send rumorMessage
 	quint32 receiverPort = (quint32)neighbors.at(qrand() % neighbors.size());
-	qDebug() << "Gossiping to neighbor " << receiverPort;
-	socket->sendData(serializeMessage(message), socket->getPort());
+	qDebug() << "INFO: Gossiping to neighbor " << receiverPort;
+	socket->sendData(serializeMessage(message), receiverPort);
 	lastRumorMessage = message;
 	timer->start(TIMEOUT);
 	// wait for statusMessage until timeout
@@ -235,9 +234,9 @@ void ChatDialog::rumorMonger(QVariantMap message)
 
 void ChatDialog::timeoutHandler()
 {
-	qDebug() << "INFO: in timeoutHandler";
-	// resend last message to last communicated node
-	socket->sendData(serializeMessage(lastRumorMessage), socket->getPort());
+	qDebug() << "INFO: In timeoutHandler";
+	// rumor monger with last sent message
+	rumorMonger(lastRumorMessage);
 	// reset timer
 	timer->start(TIMEOUT);
 }
@@ -245,7 +244,7 @@ void ChatDialog::timeoutHandler()
 
 void ChatDialog::antiEntropyHandler()
 {
-	qDebug() << "INFO: in antiEntropyHandler()";
+	qDebug() << "INFO: In antiEntropyHandler";
 	int rand_idx = qrand() % neighbors.size();
 	QVariantMap status;
 	socket->sendData(serializeMessage(status), (quint32)neighbors.at(rand_idx));
@@ -258,7 +257,7 @@ QByteArray ChatDialog::serializeMessage(QVariantMap message)
 {
 	QByteArray bytes;
 	// serialize message using QDataStream
-	QDataStream stream(&bytes, QIODevice::WriteOnly);
+	QDataStream stream(&bytes, QIODevice::ReadWrite);
 	stream << message;
 	return bytes;
 }
@@ -283,9 +282,14 @@ QVariantMap ChatDialog::createStatusMessage(QString origin, quint32 seqNum)
 
 bool ChatDialog::updateStatusMessage(QString origin, quint32 seqNum)
 {	
+	qDebug() << "INFO: In updating local status for origin" << origin << "and seqnum" << seqNum;
 	QMap<QString, QVariant> statusValue = (statusMessage["Want"]).toMap();
-	if (statusValue[origin] == seqNum || (!statusValue.contains(origin) && seqNum == 1)) {
+	qDebug() << "Local status message before update is" << statusMessage;	
+	// increment seqNum if local status contains expected seqNum or if origin not yet seen
+	if (statusValue[origin] == seqNum || seqNum == 1) {
 		statusValue[origin] = seqNum + 1;
+		statusMessage["Want"] = statusValue;
+	qDebug() << "Local status message after update is" << statusMessage;
 		return true;
 	}
 	return false;
@@ -340,7 +344,6 @@ int NetSocket::getMyPortMax()
 
 void NetSocket::sendData(QByteArray bytes, quint32 receiverPort)
 {
-	qDebug() << "Sending " << bytes << " to " << receiverPort << bytes.size();
 	writeDatagram(bytes, QHostAddress(QHostAddress::LocalHost), receiverPort);
 }
 
@@ -353,8 +356,8 @@ QVariantMap NetSocket::readData(QHostAddress senderAddr, quint16 senderPort)
 		this->readDatagram(bytes.data(), bytes.size(), &senderAddr, &senderPort);
 		// deserialize from bytes to QVariantMap
 		QDataStream stream(&bytes, QIODevice::ReadOnly);
-		qDebug() << "Receiving " << rumorMessage["ChatText"] << " from " << senderPort;
 		stream >> rumorMessage;
+		qDebug() << "INFO: Receiving " << rumorMessage << " from " << senderPort;
 	}
 	return rumorMessage;
 }
