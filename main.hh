@@ -11,24 +11,7 @@
 
 const long TIMEOUT = 1000;
 const long ANTIENTROPY_TIMEOUT = 10000;
-const qint32 STANDBY = 1;
-const qint32 WAITING_ACK = 2;
 
-class Gossip
-{
-
-public:
-	Gossip();
-	// constructor for status message
-	Gossip(QString origin, quint32 seqNum); 
-	// construtor for rumor message
-	Gossip(QString chatText, QString origin, quint32 seqNum);
-	void updateStatus(QString origin, quint32 seqNum);
-	
-	QVariantMap *rumorMessage;
-	QVariantMap *statusMessage;
-	QVariantMap *statusValue;
-};
 
 class NetSocket : public QUdpSocket
 {
@@ -39,12 +22,12 @@ public:
 
 	// Bind this socket to a P2Papp-specific default port.
 	bool bind();
-	int getPort() { return port; }
-	int getMyPortMin() { return myPortMin; }
-	int getMyPortMax() { return myPortMax; }
+	int getPort();
+	int getMyPortMin();
+	int getMyPortMax();
 	
-	void sendData(Gossip *message, quint32 receiverPort);
-	void readData(QHostAddress senderAddr, quint16 senderPort);
+	void sendData(QByteArray bytes, quint32 receiverPort);
+	QVariantMap readData(QHostAddress senderAddr, quint16 senderPort);
 
 private:
 	int myPortMin, myPortMax, port;
@@ -58,6 +41,7 @@ class ChatDialog : public QDialog
 public:
 	ChatDialog();
 
+
 public slots:
 	void gotReturnPressed();
 	void readDatagrams();
@@ -70,22 +54,24 @@ private:
 	QTimer *timer;
 	QTimer *antiEntropyTimer;	
 	NetSocket *socket;
-	Gossip *lastRumorMessage;
-	Gossip *statusMessage;
+	QVariantMap lastRumorMessage;
+	QVariantMap statusMessage;
 	QVector<int> neighbors; //nodes on adjacent ports
 	quint32 seqNum;
 	QString originId;
 
-	//need to store a map of peer originId to a map of (seqnum, gossip message) 
+	//need to store a map of read originId to a map of (seqnum, message)
+	QMap<QString, QMap<quint32, QVariantMap> > messages;
 	void addNeighbors();
-	void processDatagram(QByteArray bytes);
-	void processRumorMessage(QVariantMap message);
-	void processStatusMessage(QVariantMap message);
-	void rumorMonger(Gossip *message);
-	void sendMessage(QString text);
+	QVariantMap createStatusMessage(QString origin, quint32 seqNum);
+	QVariantMap createRumorMessage(QString chatText, QString origin, quint32 seqNum);
+	bool updateStatusMessage(QString origin, quint32 seqNum);
+	void processRumorMessage(QVariantMap rumorMessage, quint16 senderPort);
+	void processStatusMessage(QVariantMap peerStatusMessage, quint16 senderPort);
+	void rumorMonger(QVariantMap message);
+	void sendMessage(QString text); 
 	QString generateOriginId(int port);
-	QByteArray serializeMessage(QString);
-	QByteArray serializeStatus();
+	QByteArray serializeMessage(QVariantMap message);
 };
 
 #endif // P2PAPP_MAIN_HH
